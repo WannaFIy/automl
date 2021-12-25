@@ -13,11 +13,9 @@
 # limitations under the License.
 # ==============================================================================
 """EfficientNet V1 and V2 model.
-
 [1] Mingxing Tan, Quoc V. Le
   EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks.
   ICML'19, https://arxiv.org/abs/1905.11946
-
 [2] Mingxing Tan, Quoc V. Le
   EfficientNetV2: Smaller Models and Faster Training.
   https://arxiv.org/abs/2104.00298
@@ -33,23 +31,20 @@ import tensorflow as tf
 
 import effnetv2_configs
 import hparams
-import utils
+import v2utils
 
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
   """Initialization for convolutional kernels.
-
   The main difference with tf.variance_scaling_initializer is that
   tf.variance_scaling_initializer uses a truncated normal with an uncorrected
   standard deviation, whereas here we use a normal distribution. Similarly,
   tf.initializers.variance_scaling uses a truncated normal with
   a corrected standard deviation.
-
   Args:
     shape: shape of variable
     dtype: dtype of variable
     partition_info: unused
-
   Returns:
     an initialization for the variable
   """
@@ -62,17 +57,14 @@ def conv_kernel_initializer(shape, dtype=None, partition_info=None):
 
 def dense_kernel_initializer(shape, dtype=None, partition_info=None):
   """Initialization for dense kernels.
-
   This initialization is equal to
     tf.variance_scaling_initializer(scale=1.0/3.0, mode='fan_out',
                                     distribution='uniform').
   It is written out explicitly here for clarity.
-
   Args:
     shape: shape of variable
     dtype: dtype of variable
     partition_info: unused
-
   Returns:
     an initialization for the variable
   """
@@ -110,7 +102,7 @@ class SE(tf.keras.layers.Layer):
 
     self._local_pooling = mconfig.local_pooling
     self._data_format = mconfig.data_format
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     # Squeeze and Excitation layer.
     self._se_reduce = tf.keras.layers.Conv2D(
@@ -149,14 +141,12 @@ class SE(tf.keras.layers.Layer):
 
 class MBConvBlock(tf.keras.layers.Layer):
   """A class of MBConv: Mobile Inverted Residual Bottleneck.
-
   Attributes:
     endpoints: dict. A list of internal tensors.
   """
 
   def __init__(self, block_args, mconfig, name=None):
     """Initializes a MBConv block.
-
     Args:
       block_args: BlockArgs, arguments to create a Block.
       mconfig: GlobalParams, a set of global parameters.
@@ -170,7 +160,7 @@ class MBConvBlock(tf.keras.layers.Layer):
     self._data_format = mconfig.data_format
     self._channel_axis = 1 if self._data_format == 'channels_first' else -1
 
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
     self._has_se = (
         self._block_args.se_ratio is not None and
         0 < self._block_args.se_ratio <= 1)
@@ -211,7 +201,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           data_format=self._data_format,
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = utils.normalization(
+      self._norm0 = v2utils.normalization(
           mconfig.bn_type,
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
@@ -229,7 +219,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name='depthwise_conv2d')
 
-    self._norm1 = utils.normalization(
+    self._norm1 = v2utils.normalization(
         mconfig.bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
@@ -255,7 +245,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         data_format=self._data_format,
         use_bias=False,
         name=get_conv_name())
-    self._norm2 = utils.normalization(
+    self._norm2 = v2utils.normalization(
         mconfig.bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
@@ -268,19 +258,17 @@ class MBConvBlock(tf.keras.layers.Layer):
         self._block_args.input_filters == self._block_args.output_filters):
       # Apply only if skip connection presents.
       if survival_prob:
-        x = utils.drop_connect(x, training, survival_prob)
+        x = v2utils.drop_connect(x, training, survival_prob)
       x = tf.add(x, inputs)
 
     return x
 
   def call(self, inputs, training, survival_prob=None):
     """Implementation of call().
-
     Args:
       inputs: the inputs tensor.
       training: boolean, whether the model is constructed for training.
       survival_prob: float, between 0 to 1, drop connect rate.
-
     Returns:
       A output tensor.
     """
@@ -338,7 +326,7 @@ class FusedMBConvBlock(MBConvBlock):
           padding='same',
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = utils.normalization(
+      self._norm0 = v2utils.normalization(
           mconfig.bn_type,
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
@@ -362,7 +350,7 @@ class FusedMBConvBlock(MBConvBlock):
         padding='same',
         use_bias=False,
         name=get_conv_name())
-    self._norm1 = utils.normalization(
+    self._norm1 = v2utils.normalization(
         mconfig.bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
@@ -372,12 +360,10 @@ class FusedMBConvBlock(MBConvBlock):
 
   def call(self, inputs, training, survival_prob=None):
     """Implementation of call().
-
     Args:
       inputs: the inputs tensor.
       training: boolean, whether the model is constructed for training.
       survival_prob: float, between 0 to 1, drop connect rate.
-
     Returns:
       A output tensor.
     """
@@ -418,13 +404,13 @@ class Stem(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = utils.normalization(
+    self._norm = v2utils.normalization(
         mconfig.bn_type,
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
         groups=mconfig.gn_groups)
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
 
   def call(self, inputs, training):
     return self._act(self._norm(self._conv_stem(inputs), training=training))
@@ -448,13 +434,13 @@ class Head(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = utils.normalization(
+    self._norm = v2utils.normalization(
         mconfig.bn_type,
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
         groups=mconfig.gn_groups)
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D(
         data_format=mconfig.data_format)
@@ -496,7 +482,6 @@ class Head(tf.keras.layers.Layer):
 
 class EffNetV2Model(tf.keras.Model):
   """A class implements tf.keras.Model.
-
     Reference: https://arxiv.org/abs/1807.11626
   """
 
@@ -506,13 +491,11 @@ class EffNetV2Model(tf.keras.Model):
                include_top=True,
                name=None):
     """Initializes an `Model` instance.
-
     Args:
       model_name: A string of model name.
       model_config: A dict of model configurations or a string of hparams.
       include_top: If True, include the top layer for classification.
       name: A string of layer name.
-
     Raises:
       ValueError: when blocks_args is not specified as a list.
     """
@@ -587,12 +570,10 @@ class EffNetV2Model(tf.keras.Model):
 
   def call(self, inputs, training=False, with_endpoints=False):
     """Implementation of call().
-
     Args:
       inputs: input tensors.
       training: boolean, whether the model is constructed for training.
       with_endpoints: If true, return a list of endpoints.
-
     Returns:
       output tensors.
     """
@@ -659,9 +640,7 @@ def get_model(model_name,
               with_endpoints=False,
               **kwargs):
   """Get a EfficientNet V1 or V2 model instance.
-
   This is a simply utility for finetuning or inference.
-
   Args:
     model_name: a string such as 'efficientnetv2-s' or 'efficientnet-b0'.
     model_config: A dict of model configurations or a string of hparams.
@@ -675,7 +654,6 @@ def get_model(model_name,
     training: If true, all model variables are trainable.
     with_endpoints: whether to return all intermedia endpoints.
     **kwargs: additional parameters for keras model, such as name=xx.
-
   Returns:
     A single tensor if with_endpoints if False; otherwise, a list of tensor.
   """
@@ -778,7 +756,7 @@ def get_model(model_name,
   if model_name in pretrained_ckpts and weights in pretrained_ckpts[model_name]:
     url = pretrained_ckpts[model_name][weights]
     fname = os.path.basename(url).split('.')[0]
-    pretrained_ckpt= tf.keras.utils.get_file(fname, url , untar=True)
+    pretrained_ckpt= tf.keras.v2utils.get_file(fname, url , untar=True)
   else:
     pretrained_ckpt = weights
 
