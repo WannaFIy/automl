@@ -31,7 +31,7 @@ import tensorflow as tf
 
 import effnetv2_configs
 import hparams
-import utils
+import v2utils
 
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
@@ -102,7 +102,7 @@ class SE(tf.keras.layers.Layer):
 
     self._local_pooling = mconfig.local_pooling
     self._data_format = mconfig.data_format
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     # Squeeze and Excitation layer.
     self._se_reduce = tf.keras.layers.Conv2D(
@@ -160,7 +160,7 @@ class MBConvBlock(tf.keras.layers.Layer):
     self._data_format = mconfig.data_format
     self._channel_axis = 1 if self._data_format == 'channels_first' else -1
 
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
     self._has_se = (
         self._block_args.se_ratio is not None and
         0 < self._block_args.se_ratio <= 1)
@@ -201,7 +201,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           data_format=self._data_format,
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = utils.normalization(
+      self._norm0 = v2utils.normalization(
           mconfig.bn_type,
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
@@ -219,7 +219,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name='depthwise_conv2d')
 
-    self._norm1 = utils.normalization(
+    self._norm1 = v2utils.normalization(
         mconfig.bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
@@ -245,7 +245,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         data_format=self._data_format,
         use_bias=False,
         name=get_conv_name())
-    self._norm2 = utils.normalization(
+    self._norm2 = v2utils.normalization(
         mconfig.bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
@@ -258,7 +258,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         self._block_args.input_filters == self._block_args.output_filters):
       # Apply only if skip connection presents.
       if survival_prob:
-        x = utils.drop_connect(x, training, survival_prob)
+        x = v2utils.drop_connect(x, training, survival_prob)
       x = tf.add(x, inputs)
 
     return x
@@ -326,7 +326,7 @@ class FusedMBConvBlock(MBConvBlock):
           padding='same',
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = utils.normalization(
+      self._norm0 = v2utils.normalization(
           mconfig.bn_type,
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
@@ -350,7 +350,7 @@ class FusedMBConvBlock(MBConvBlock):
         padding='same',
         use_bias=False,
         name=get_conv_name())
-    self._norm1 = utils.normalization(
+    self._norm1 = v2utils.normalization(
         mconfig.bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
@@ -404,13 +404,13 @@ class Stem(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = utils.normalization(
+    self._norm = v2utils.normalization(
         mconfig.bn_type,
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
         groups=mconfig.gn_groups)
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
 
   def call(self, inputs, training):
     return self._act(self._norm(self._conv_stem(inputs), training=training))
@@ -434,13 +434,13 @@ class Head(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = utils.normalization(
+    self._norm = v2utils.normalization(
         mconfig.bn_type,
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
         groups=mconfig.gn_groups)
-    self._act = utils.get_act_fn(mconfig.act_fn)
+    self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D(
         data_format=mconfig.data_format)
