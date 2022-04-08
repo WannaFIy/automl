@@ -31,7 +31,7 @@ import tensorflow as tf
 
 import effnetv2_configs
 import hparams
-import v2utils
+import utils
 
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
@@ -102,7 +102,7 @@ class SE(tf.keras.layers.Layer):
 
     self._local_pooling = mconfig.local_pooling
     self._data_format = mconfig.data_format
-    self._act = v2utils.get_act_fn(mconfig.act_fn)
+    self._act = utils.get_act_fn(mconfig.act_fn)
 
     # Squeeze and Excitation layer.
     self._se_reduce = tf.keras.layers.Conv2D(
@@ -160,7 +160,7 @@ class MBConvBlock(tf.keras.layers.Layer):
     self._data_format = mconfig.data_format
     self._channel_axis = 1 if self._data_format == 'channels_first' else -1
 
-    self._act = v2utils.get_act_fn(mconfig.act_fn)
+    self._act = utils.get_act_fn(mconfig.act_fn)
     self._has_se = (
         self._block_args.se_ratio is not None and
         0 < self._block_args.se_ratio <= 1)
@@ -201,7 +201,13 @@ class MBConvBlock(tf.keras.layers.Layer):
           data_format=self._data_format,
           use_bias=False,
           name=get_conv_name())
-
+      self._norm0 = utils.normalization(
+          mconfig.bn_type,
+          axis=self._channel_axis,
+          momentum=mconfig.bn_momentum,
+          epsilon=mconfig.bn_epsilon,
+          groups=mconfig.gn_groups,
+          name=get_norm_name())
 
     # Depth-wise convolution phase. Called if not using fused convolutions.
     self._depthwise_conv = tf.keras.layers.DepthwiseConv2D(
@@ -213,6 +219,13 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name='depthwise_conv2d')
 
+    self._norm1 = utils.normalization(
+        mconfig.bn_type,
+        axis=self._channel_axis,
+        momentum=mconfig.bn_momentum,
+        epsilon=mconfig.bn_epsilon,
+        groups=mconfig.gn_groups,
+        name=get_norm_name())
 
     if self._has_se:
       num_reduced_filters = max(
@@ -232,14 +245,20 @@ class MBConvBlock(tf.keras.layers.Layer):
         data_format=self._data_format,
         use_bias=False,
         name=get_conv_name())
-
+    self._norm2 = utils.normalization(
+        mconfig.bn_type,
+        axis=self._channel_axis,
+        momentum=mconfig.bn_momentum,
+        epsilon=mconfig.bn_epsilon,
+        groups=mconfig.gn_groups,
+        name=get_norm_name())
 
   def residual(self, inputs, x, training, survival_prob):
     if (self._block_args.strides == 1 and
         self._block_args.input_filters == self._block_args.output_filters):
       # Apply only if skip connection presents.
       if survival_prob:
-        x = v2utils.drop_connect(x, training, survival_prob)
+        x = utils.drop_connect(x, training, survival_prob)
       x = tf.add(x, inputs)
 
     return x
@@ -257,10 +276,10 @@ class MBConvBlock(tf.keras.layers.Layer):
                  inputs.dtype)
     x = inputs
     if self._block_args.expand_ratio != 1:
-      x = self._act(self._expand_conv(x))
+      x = self._act(self._norm0(self._expand_conv(x), training=training))
       logging.info('Expand shape: %s', x.shape)
 
-    x = self._act(self._depthwise_conv(x))
+    x = self._act(self._norm1(self._depthwise_conv(x), training=training))
     logging.info('DWConv shape: %s', x.shape)
 
     if self._mconfig.conv_dropout and self._block_args.expand_ratio > 1:
@@ -272,7 +291,7 @@ class MBConvBlock(tf.keras.layers.Layer):
 
     self.endpoints = {'expansion_output': x}
 
-    x = self._project_conv(x)
+    x = self._norm2(self._project_conv(x), training=training)
     x = self.residual(inputs, x, training, survival_prob)
 
     logging.info('Project shape: %s', x.shape)
@@ -307,6 +326,13 @@ class FusedMBConvBlock(MBConvBlock):
           padding='same',
           use_bias=False,
           name=get_conv_name())
+      self._norm0 = utils.normalization(
+          mconfig.bn_type,
+          axis=self._channel_axis,
+          momentum=mconfig.bn_momentum,
+          epsilon=mconfig.bn_epsilon,
+          groups=mconfig.gn_groups,
+          name=get_norm_name())
 
     if self._has_se:
       num_reduced_filters = max(
@@ -324,7 +350,13 @@ class FusedMBConvBlock(MBConvBlock):
         padding='same',
         use_bias=False,
         name=get_conv_name())
-
+    self._norm1 = utils.normalization(
+        mconfig.bn_type,
+        axis=self._channel_axis,
+        momentum=mconfig.bn_momentum,
+        epsilon=mconfig.bn_epsilon,
+        groups=mconfig.gn_groups,
+        name=get_norm_name())
 
   def call(self, inputs, training, survival_prob=None):
     """Implementation of call().
@@ -338,7 +370,7 @@ class FusedMBConvBlock(MBConvBlock):
     logging.info('Block %s  input shape: %s', self.name, inputs.shape)
     x = inputs
     if self._block_args.expand_ratio != 1:
-      x = self._act(self._expand_conv(x))
+      x = self._act(self._norm0(self._expand_conv(x), training=training))
     logging.info('Expand shape: %s', x.shape)
 
     self.endpoints = {'expansion_output': x}
@@ -349,7 +381,7 @@ class FusedMBConvBlock(MBConvBlock):
     if self._se:
       x = self._se(x)
 
-    x = self._project_conv(x)
+    x = self._norm1(self._project_conv(x), training=training)
     if self._block_args.expand_ratio == 1:
       x = self._act(x)  # add act if no expansion.
 
@@ -372,11 +404,16 @@ class Stem(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-
-    self._act = v2utils.get_act_fn(mconfig.act_fn)
+    self._norm = utils.normalization(
+        mconfig.bn_type,
+        axis=(1 if mconfig.data_format == 'channels_first' else -1),
+        momentum=mconfig.bn_momentum,
+        epsilon=mconfig.bn_epsilon,
+        groups=mconfig.gn_groups)
+    self._act = utils.get_act_fn(mconfig.act_fn)
 
   def call(self, inputs, training):
-    return self._act(self._conv_stem(inputs))
+    return self._act(self._norm(self._conv_stem(inputs), training=training))
 
 
 class Head(tf.keras.layers.Layer):
@@ -397,8 +434,13 @@ class Head(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-
-    self._act = v2utils.get_act_fn(mconfig.act_fn)
+    self._norm = utils.normalization(
+        mconfig.bn_type,
+        axis=(1 if mconfig.data_format == 'channels_first' else -1),
+        momentum=mconfig.bn_momentum,
+        epsilon=mconfig.bn_epsilon,
+        groups=mconfig.gn_groups)
+    self._act = utils.get_act_fn(mconfig.act_fn)
 
     self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D(
         data_format=mconfig.data_format)
@@ -413,7 +455,7 @@ class Head(tf.keras.layers.Layer):
 
   def call(self, inputs, training):
     """Call the layer."""
-    outputs = self._act(self._conv_head(inputs))
+    outputs = self._act(self._norm(self._conv_head(inputs), training=training))
     self.endpoints['head_1x1'] = outputs
 
     if self._mconfig.local_pooling:
