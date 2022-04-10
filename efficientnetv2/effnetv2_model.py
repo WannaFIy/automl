@@ -33,8 +33,6 @@ import effnetv2_configs
 import hparams
 import v2utils
 
-from keras.engine import base_layer
-from keras.utils import tf_utils
 
 class UnitNormalization(tf.keras.layers.Layer):
   """Unit normalization layer.
