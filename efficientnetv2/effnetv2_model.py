@@ -33,15 +33,10 @@ import effnetv2_configs
 import hparams
 import v2utils
 
-import tensorflow.compat.v2 as tf
-
 from keras.engine import base_layer
 from keras.utils import tf_utils
 
-from tensorflow.python.util.tf_export import keras_export
-
-
-class UnitNormalization(base_layer.Layer):
+class UnitNormalization(tf.keras.layers.Layer):
   """Unit normalization layer.
   Normalize a batch of inputs so that each input in the batch has a L2 norm
   equal to 1 (across the axes specified in `axis`).
@@ -73,7 +68,7 @@ class UnitNormalization(base_layer.Layer):
     self.supports_masking = True
 
   def build(self, input_shape):
-    self.axis = tf_utils.validate_axis(self.axis, input_shape)
+    self.axis = -1
 
   def call(self, inputs):
     inputs = tf.cast(inputs, self.compute_dtype)
