@@ -24,7 +24,7 @@ import copy
 import itertools
 import math
 import os
-
+import tensorflow_addons as tfa
 from absl import logging
 import numpy as np
 import tensorflow as tf
@@ -33,52 +33,6 @@ import effnetv2_configs
 import hparams
 import v2utils
 
-
-class UnitNormalization(tf.keras.layers.Layer):
-  """Unit normalization layer.
-  Normalize a batch of inputs so that each input in the batch has a L2 norm
-  equal to 1 (across the axes specified in `axis`).
-  Example:
-  >>> data = tf.constant(np.arange(6).reshape(2, 3), dtype=tf.float32)
-  >>> normalized_data = tf.keras.layers.UnitNormalization()(data)
-  >>> print(tf.reduce_sum(normalized_data[0, :] ** 2).numpy())
-  1.0
-  Args:
-    axis: Integer or list/tuple. The axis or axes to normalize across. Typically
-      this is the features axis or axes. The left-out axes are typically the
-      batch axis or axes. Defaults to `-1`, the last dimension in
-      the input.
-  """
-
-  def __init__(self,
-               axis=-1,
-               **kwargs):
-    super().__init__(**kwargs)
-    if isinstance(axis, (list, tuple)):
-      self.axis = list(axis)
-    elif isinstance(axis, int):
-      self.axis = axis
-    else:
-      raise TypeError(
-          'Invalid value for `axis` argument: '
-          'expected an int or a list/tuple of ints. '
-          f'Received: axis={axis}')
-    self.supports_masking = True
-
-  def build(self, input_shape):
-    self.axis = -1
-
-  def call(self, inputs):
-    inputs = tf.cast(inputs, self.compute_dtype)
-    return tf.linalg.l2_normalize(inputs, axis=self.axis)
-
-  def compute_output_shape(self, input_shape):
-    return input_shape
-
-  def get_config(self):
-    config = super(UnitNormalization, self).get_config()
-    config.update({'axis': self.axis})
-    return config
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
   """Initialization for convolutional kernels.
@@ -247,7 +201,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           data_format=self._data_format,
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = UnitNormalization()
+      self._norm0 = GroupNormalization()
 
     # Depth-wise convolution phase. Called if not using fused convolutions.
     self._depthwise_conv = tf.keras.layers.DepthwiseConv2D(
@@ -259,7 +213,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name='depthwise_conv2d')
 
-    self._norm1 = UnitNormalization()
+    self._norm1 = GroupNormalization()
 
     if self._has_se:
       num_reduced_filters = max(
@@ -279,7 +233,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         data_format=self._data_format,
         use_bias=False,
         name=get_conv_name())
-    self._norm2 = UnitNormalization()
+    self._norm2 = GroupNormalization()
 
   def residual(self, inputs, x, training, survival_prob):
     if (self._block_args.strides == 1 and
@@ -304,10 +258,10 @@ class MBConvBlock(tf.keras.layers.Layer):
                  inputs.dtype)
     x = inputs
     if self._block_args.expand_ratio != 1:
-      x = self._act(self._norm0(self._expand_conv(x)))
+      x = self._act(self._norm0(self._expand_conv(x), training=training))
       logging.info('Expand shape: %s', x.shape)
 
-    x = self._act(self._norm1(self._depthwise_conv(x)))
+    x = self._act(self._norm1(self._depthwise_conv(x), training=training))
     logging.info('DWConv shape: %s', x.shape)
 
     if self._mconfig.conv_dropout and self._block_args.expand_ratio > 1:
@@ -319,7 +273,7 @@ class MBConvBlock(tf.keras.layers.Layer):
 
     self.endpoints = {'expansion_output': x}
 
-    x = self._norm2(self._project_conv(x))
+    x = self._norm2(self._project_conv(x), training=training)
     x = self.residual(inputs, x, training, survival_prob)
 
     logging.info('Project shape: %s', x.shape)
@@ -354,7 +308,7 @@ class FusedMBConvBlock(MBConvBlock):
           padding='same',
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = UnitNormalization()
+      self._norm0 = GroupNormalization()
 
     if self._has_se:
       num_reduced_filters = max(
@@ -372,7 +326,7 @@ class FusedMBConvBlock(MBConvBlock):
         padding='same',
         use_bias=False,
         name=get_conv_name())
-    self._norm1 = UnitNormalization()
+    self._norm1 = GroupNormalization()
 
   def call(self, inputs, training, survival_prob=None):
     """Implementation of call().
@@ -386,7 +340,7 @@ class FusedMBConvBlock(MBConvBlock):
     logging.info('Block %s  input shape: %s', self.name, inputs.shape)
     x = inputs
     if self._block_args.expand_ratio != 1:
-      x = self._act(self._norm0(self._expand_conv(x)))
+      x = self._act(self._norm0(self._expand_conv(x), training=training))
     logging.info('Expand shape: %s', x.shape)
 
     self.endpoints = {'expansion_output': x}
@@ -397,7 +351,7 @@ class FusedMBConvBlock(MBConvBlock):
     if self._se:
       x = self._se(x)
 
-    x = self._norm1(self._project_conv(x))
+    x = self._norm1(self._project_conv(x), training=training)
     if self._block_args.expand_ratio == 1:
       x = self._act(x)  # add act if no expansion.
 
@@ -420,11 +374,11 @@ class Stem(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = UnitNormalization()
+    self._norm = GroupNormalization()
     self._act = v2utils.get_act_fn(mconfig.act_fn)
 
   def call(self, inputs, training):
-    return self._act(self._norm(self._conv_stem(inputs)))
+    return self._act(self._norm(self._conv_stem(inputs), training=training))
 
 
 class Head(tf.keras.layers.Layer):
@@ -445,7 +399,7 @@ class Head(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = UnitNormalization()
+    self._norm = GroupNormalization()
     self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D(
@@ -461,7 +415,7 @@ class Head(tf.keras.layers.Layer):
 
   def call(self, inputs, training):
     """Call the layer."""
-    outputs = self._act(self._norm(self._conv_head(inputs)))
+    outputs = self._act(self._norm(self._conv_head(inputs), training=training))
     self.endpoints['head_1x1'] = outputs
 
     if self._mconfig.local_pooling:
