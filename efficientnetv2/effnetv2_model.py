@@ -201,7 +201,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           data_format=self._data_format,
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = GroupNormalization()
+      self._norm0 = tfa.layers.GroupNormalization()
 
     # Depth-wise convolution phase. Called if not using fused convolutions.
     self._depthwise_conv = tf.keras.layers.DepthwiseConv2D(
@@ -213,7 +213,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name='depthwise_conv2d')
 
-    self._norm1 = GroupNormalization()
+    self._norm1 = tfa.layers.GroupNormalization()
 
     if self._has_se:
       num_reduced_filters = max(
@@ -233,7 +233,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         data_format=self._data_format,
         use_bias=False,
         name=get_conv_name())
-    self._norm2 = GroupNormalization()
+    self._norm2 = tfa.layers.GroupNormalization()
 
   def residual(self, inputs, x, training, survival_prob):
     if (self._block_args.strides == 1 and
@@ -308,7 +308,7 @@ class FusedMBConvBlock(MBConvBlock):
           padding='same',
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = GroupNormalization()
+      self._norm0 = tfa.layers.GroupNormalization()
 
     if self._has_se:
       num_reduced_filters = max(
@@ -326,7 +326,7 @@ class FusedMBConvBlock(MBConvBlock):
         padding='same',
         use_bias=False,
         name=get_conv_name())
-    self._norm1 = GroupNormalization()
+    self._norm1 = tfa.layers.GroupNormalization()
 
   def call(self, inputs, training, survival_prob=None):
     """Implementation of call().
@@ -374,7 +374,7 @@ class Stem(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = GroupNormalization()
+    self._norm = tfa.layers.GroupNormalization()
     self._act = v2utils.get_act_fn(mconfig.act_fn)
 
   def call(self, inputs, training):
@@ -399,7 +399,7 @@ class Head(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = GroupNormalization()
+    self._norm = tfa.layers.GroupNormalization()
     self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D(
