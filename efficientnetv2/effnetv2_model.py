@@ -33,6 +33,68 @@ import effnetv2_configs
 import hparams
 import v2utils
 
+import functools
+import tensorflow.compat.v1 as tf
+
+from tensorflow.python.ops import math_ops  # pylint:disable=g-direct-tensorflow-import
+from tensorflow.python.tpu import tpu_function  # pylint:disable=g-direct-tensorflow-import
+
+
+def cross_replica_average(t, num_groups=1):
+  """Calculates the average value of input tensor across TPU replicas."""
+  num_shards = tpu_function.get_tpu_context().number_of_shards
+  num_shards_per_group = 1
+  group_assignment = None
+  if num_groups > 0:
+    if num_shards % num_groups != 0:
+      raise ValueError('num_shards: %d mod num_groups: %d, should be 0' %
+                       (num_shards, num_groups))
+    num_shards_per_group = num_shards // num_groups
+    group_assignment = [[
+        x for x in range(num_shards) if x // num_shards_per_group == y
+    ] for y in range(num_groups)]
+  return tf.tpu.cross_replica_sum(t, group_assignment) / math_ops.cast(
+      num_shards_per_group, t.dtype)
+
+
+class TPUBatchNormalization(tf.layers.BatchNormalization):
+  """Batch Normalization layer that supports cross replica computation on TPU.
+  This class extends the keras.BatchNormalization implementation by supporting
+  cross replica means and variances. The base class implementation only computes
+  moments based on mini-batch per replica (TPU core).
+  For detailed information of arguments and implementation, refer to:
+  https://www.tensorflow.org/api_docs/python/tf/keras/layers/BatchNormalization
+  Attributes:
+    fused: if `None` or `True`, use a faster, fused implementation if possible.
+      If `False`, use the system recommended implementation.
+    cross_replica_average_fn:  A function takes a tensor and outputs the mean
+      value across all the replicas. Currently, only TPU version supports this
+      feature. If specified, fused must be `False`.
+  """
+
+  def __init__(self, fused=None, cross_replica_average_fn=None, **kwargs):
+    kwargs['fused'] = fused
+    super(BatchNormalization, self).__init__(**kwargs)
+    self.cross_replica_average_fn = cross_replica_average_fn
+
+    if fused and cross_replica_average_fn is not None:
+      raise ValueError('fused must be `False` when sepcifying'
+                       ' cross_replica_average_fn')
+
+  def _moments(self, inputs, reduction_axes, keep_dims):
+    shard_mean, shard_variance = super(BatchNormalization, self)._moments(
+        inputs, reduction_axes, keep_dims=keep_dims)
+    if self.cross_replica_average_fn:
+      # Uses the definition of Var[X] = E[X^2] - E[X]^2.
+      shard_square_of_mean = tf.math.square(shard_mean)
+      shard_mean_of_square = shard_variance + shard_square_of_mean
+      group_mean = self.cross_replica_average_fn(shard_mean)
+      group_mean_of_square = self.cross_replica_average_fn(shard_mean_of_square)
+      group_variance = group_mean_of_square - tf.math.square(group_mean)
+      return (group_mean, group_variance)
+    else:
+      return (shard_mean, shard_variance)
+
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
   """Initialization for convolutional kernels.
@@ -201,7 +263,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           data_format=self._data_format,
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = tfa.layers.InstanceNormalization()
+      self._norm0 = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
 
     # Depth-wise convolution phase. Called if not using fused convolutions.
     self._depthwise_conv = tf.keras.layers.DepthwiseConv2D(
@@ -213,7 +275,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name='depthwise_conv2d')
 
-    self._norm1 = tfa.layers.InstanceNormalization()
+    self._norm1 = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
 
     if self._has_se:
       num_reduced_filters = max(
@@ -233,7 +295,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         data_format=self._data_format,
         use_bias=False,
         name=get_conv_name())
-    self._norm2 = tfa.layers.InstanceNormalization()
+    self._norm2 = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
 
   def residual(self, inputs, x, training, survival_prob):
     if (self._block_args.strides == 1 and
@@ -308,7 +370,7 @@ class FusedMBConvBlock(MBConvBlock):
           padding='same',
           use_bias=False,
           name=get_conv_name())
-      self._norm0 = tfa.layers.InstanceNormalization()
+      self._norm0 = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
 
     if self._has_se:
       num_reduced_filters = max(
@@ -326,7 +388,7 @@ class FusedMBConvBlock(MBConvBlock):
         padding='same',
         use_bias=False,
         name=get_conv_name())
-    self._norm1 = tfa.layers.InstanceNormalization()
+    self._norm1 = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
 
   def call(self, inputs, training, survival_prob=None):
     """Implementation of call().
@@ -374,7 +436,7 @@ class Stem(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = tfa.layers.InstanceNormalization()
+    self._norm = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
     self._act = v2utils.get_act_fn(mconfig.act_fn)
 
   def call(self, inputs, training):
@@ -399,7 +461,7 @@ class Head(tf.keras.layers.Layer):
         data_format=mconfig.data_format,
         use_bias=False,
         name='conv2d')
-    self._norm = tfa.layers.InstanceNormalization()
+    self._norm = TPUBatchNormalization(cross_replica_average_fn=functools.partial(cross_replica_average, num_groups=1))
     self._act = v2utils.get_act_fn(mconfig.act_fn)
 
     self._avg_pooling = tf.keras.layers.GlobalAveragePooling2D(
