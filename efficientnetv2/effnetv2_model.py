@@ -74,7 +74,7 @@ class TPUBatchNormalization(tf.layers.BatchNormalization):
 
   def __init__(self, fused=None, cross_replica_average_fn=None, **kwargs):
     kwargs['fused'] = fused
-    super(BatchNormalization, self).__init__(**kwargs)
+    super(TPUBatchNormalization, self).__init__(**kwargs)
     self.cross_replica_average_fn = cross_replica_average_fn
 
     if fused and cross_replica_average_fn is not None:
