@@ -212,7 +212,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           use_bias=False,
           name=get_conv_name())
       self._norm0 = v2utils.normalization(
-          tpu_bn,
+          'tpu_bn',
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
           epsilon=mconfig.bn_epsilon,
@@ -230,7 +230,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         name='depthwise_conv2d')
 
     self._norm1 = v2utils.normalization(
-        tpu_bn,
+        'tpu_bn',
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -256,7 +256,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name=get_conv_name())
     self._norm2 = v2utils.normalization(
-        tpu_bn,
+        'tpu_bn',
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -339,7 +339,7 @@ class FusedMBConvBlock(MBConvBlock):
           use_bias=False,
           name=get_conv_name())
       self._norm0 = v2utils.normalization(
-          tpu_bn,
+          'tpu_bn',
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
           epsilon=mconfig.bn_epsilon,
@@ -363,7 +363,7 @@ class FusedMBConvBlock(MBConvBlock):
         use_bias=False,
         name=get_conv_name())
     self._norm1 = v2utils.normalization(
-        tpu_bn,
+        'tpu_bn',
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -419,7 +419,7 @@ class Stem(tf.keras.layers.Layer):
         use_bias=False,
         name='conv2d')
     self._norm = v2utils.normalization(
-        tpu_bn,
+        'tpu_bn',
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -449,7 +449,7 @@ class Head(tf.keras.layers.Layer):
         use_bias=False,
         name='conv2d')
     self._norm = v2utils.normalization(
-        tpu_bn,
+        'tpu_bn',
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
