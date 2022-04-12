@@ -1,25 +1,3 @@
-# Copyright 2021 Google Research. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
-"""EfficientNet V1 and V2 model.
-[1] Mingxing Tan, Quoc V. Le
-  EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks.
-  ICML'19, https://arxiv.org/abs/1905.11946
-[2] Mingxing Tan, Quoc V. Le
-  EfficientNetV2: Smaller Models and Faster Training.
-  https://arxiv.org/abs/2104.00298
-"""
 import copy
 import itertools
 import math
@@ -33,6 +11,7 @@ import effnetv2_configs
 import hparams
 import v2utils
 
+bn_type = 'tpu_bn'
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
   """Initialization for convolutional kernels.
@@ -202,7 +181,7 @@ class MBConvBlock(tf.keras.layers.Layer):
           use_bias=False,
           name=get_conv_name())
       self._norm0 = v2utils.normalization(
-          'bn',
+          bn_type,
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
           epsilon=mconfig.bn_epsilon,
@@ -220,7 +199,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         name='depthwise_conv2d')
 
     self._norm1 = v2utils.normalization(
-        'bn',
+        bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -246,7 +225,7 @@ class MBConvBlock(tf.keras.layers.Layer):
         use_bias=False,
         name=get_conv_name())
     self._norm2 = v2utils.normalization(
-        'bn',
+        bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -327,7 +306,7 @@ class FusedMBConvBlock(MBConvBlock):
           use_bias=False,
           name=get_conv_name())
       self._norm0 = v2utils.normalization(
-          'bn',
+          bn_type,
           axis=self._channel_axis,
           momentum=mconfig.bn_momentum,
           epsilon=mconfig.bn_epsilon,
@@ -351,7 +330,7 @@ class FusedMBConvBlock(MBConvBlock):
         use_bias=False,
         name=get_conv_name())
     self._norm1 = v2utils.normalization(
-        'bn',
+        bn_type,
         axis=self._channel_axis,
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -405,7 +384,7 @@ class Stem(tf.keras.layers.Layer):
         use_bias=False,
         name='conv2d')
     self._norm = v2utils.normalization(
-        'bn',
+        bn_type,
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
@@ -435,7 +414,7 @@ class Head(tf.keras.layers.Layer):
         use_bias=False,
         name='conv2d')
     self._norm = v2utils.normalization(
-        'bn',
+        bn_type,
         axis=(1 if mconfig.data_format == 'channels_first' else -1),
         momentum=mconfig.bn_momentum,
         epsilon=mconfig.bn_epsilon,
