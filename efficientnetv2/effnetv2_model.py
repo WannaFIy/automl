@@ -11,7 +11,7 @@ import effnetv2_configs
 import hparams
 import v2utils
 
-bn_type = 'gn'
+bn_type = 'bn'
 
 def conv_kernel_initializer(shape, dtype=None, partition_info=None):
   """Initialization for convolutional kernels.
